@@ -8,6 +8,7 @@ import threading
 from werkzeug.utils import secure_filename
 from threading import Lock
 import sys
+import re
 
 app = Flask(__name__)
 
@@ -21,56 +22,115 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 class SpanishTTS:
     def __init__(self):
         self.engine = self._init_local_engine()
+        self.gtts_fallback = False  # Bandera para usar gTTS como fallback
 
     def _init_local_engine(self):
-        """Configura específicamente una voz en español para pyttsx3"""
+        """Configura específicamente una voz en español para pyttsx3 con más opciones"""
         try:
             engine = pyttsx3.init()
             voices = engine.getProperty('voices')
-
+            
+            # Patrones para identificar voces en español
+            spanish_patterns = [
+                r'es(-|_)?(mx|es|ar|co|pe|ve|cl|ec|uy|py|bo|cr|do|pa|gt|hn|ni|sv|pr|cu)?',
+                r'spanish',
+                r'español',
+                r'latino',
+                r'mexican'
+            ]
+            
+            spanish_voices = []
             for voice in voices:
-                print(f"Voz disponible: {voice.name} - ID: {voice.id}")
-                if 'spanish' in voice.name.lower() or 'español' in voice.name.lower() or 'es' in voice.id.lower():
-                    engine.setProperty('voice', voice.id)
-                    print(f"Voz seleccionada: {voice.name}")
-                    break
+                voice_id = voice.id.lower()
+                voice_name = voice.name.lower()
+                
+                # Verificar si la voz es en español
+                if any(re.search(pattern, voice_id) or re.search(pattern, voice_name) 
+                      for pattern in spanish_patterns):
+                    spanish_voices.append(voice)
+                    print(f"Voz en español encontrada: {voice.name} - ID: {voice.id}")
+            
+            if spanish_voices:
+                # Seleccionar la primera voz en español encontrada
+                selected_voice = spanish_voices[0]
+                engine.setProperty('voice', selected_voice.id)
+                print(f"Voz seleccionada: {selected_voice.name}")
+                
+                # Configurar parámetros para mejor calidad
+                engine.setProperty('rate', 150)  # Velocidad moderada
+                engine.setProperty('volume', 0.9)  # Volumen alto
+                return engine
             else:
-                print("No se encontró voz en español, usando la primera disponible.")
-                engine.setProperty('voice', voices[0].id)
-
-            engine.setProperty('rate', 150)
-            return engine
+                print("No se encontraron voces en español. Se usará gTTS como fallback.")
+                self.gtts_fallback = True
+                return None
+                
         except Exception as e:
-            print(f"No se pudo inicializar el motor local en español: {e}")
+            print(f"No se pudo inicializar el motor local: {e}")
+            self.gtts_fallback = True
             return None
 
-    def convert_to_speech(self, text, output_file):
-        """Conversión a audio EN ESPAÑOL SI O SI"""
-        try:
-            # Intento con gTTS
-            tts = gTTS(text=text, lang='es', tld='com.mx')
-            tts.save(output_file)
-
-            # Verificación del idioma
-            with open(output_file, 'rb') as f:
-                header = f.read(100)
-                if b'lang: en' in header:
-                    raise Exception("gTTS generó inglés por error")
-
-            return True
-        except Exception as e:
-            print(f"Error con gTTS: {e}. Usando motor local...")
-
-            # Intento con motor local
-            if self.engine:
-                try:
-                    self.engine.save_to_file(text, output_file)
-                    self.engine.runAndWait()
+    def _force_spanish_gtts(self, text, output_file):
+        """Método reforzado para gTTS en español con múltiples intentos"""
+        # Lista de dominios regionales para español
+        tld_options = ['com.mx', 'es', 'com.ar', 'com.co', 'com']
+        
+        for tld in tld_options:
+            try:
+                tts = gTTS(text=text, lang='es', tld=tld)
+                tts.save(output_file)
+                
+                # Verificación adicional del archivo generado
+                with open(output_file, 'rb') as f:
+                    content = f.read(1000)
+                    if b'lang: es' in content or b'lang:es' in content:
+                        return True
+                    elif b'lang: en' in content:
+                        print(f"gTTS generó inglés con tld={tld}, intentando siguiente opción...")
+                        continue
+                
+                # Si el archivo tiene contenido válido
+                if os.path.getsize(output_file) > 1024:  # Tamaño mínimo razonable
                     return True
-                except Exception as e:
-                    print(f"Error con motor local: {e}")
+                    
+            except Exception as e:
+                print(f"Error con gTTS (tld={tld}): {e}")
+                continue
+                
+        return False
 
+    def convert_to_speech(self, text, output_file):
+        """Conversión a audio EN ESPAÑOL con múltiples estrategias"""
+        if not text.strip():
+            print("Texto vacío, no se puede convertir")
             return False
+            
+        # Primero intentar con gTTS (mejor calidad en español)
+        print("Intentando con gTTS...")
+        if self._force_spanish_gtts(text, output_file):
+            print("gTTS generó archivo en español correctamente")
+            return True
+        
+        # Si gTTS falla, intentar con motor local si está disponible
+        if self.engine and not self.gtts_fallback:
+            print("Fallo con gTTS, intentando con motor local...")
+            try:
+                # Limpiar archivo de salida por si acaso
+                if os.path.exists(output_file):
+                    os.remove(output_file)
+                
+                self.engine.save_to_file(text, output_file)
+                self.engine.runAndWait()
+                
+                # Verificar que se creó el archivo
+                if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+                    return True
+            except Exception as e:
+                print(f"Error con motor local: {e}")
+        
+        # Último recurso: forzar gTTS aunque haya fallado antes
+        print("Intentando forzar gTTS como último recurso...")
+        return self._force_spanish_gtts(text, output_file)
 
     def _get_spanish_voice_id(self):
         """Obtiene la primera voz en español disponible"""
