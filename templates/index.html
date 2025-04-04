@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lector de Texto a Voz</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 32px;
+            margin-bottom: 20px;    
+        }
+        #convertir {
+            background-color: #16a085;
+            color: white;
+            border: none;
+            font-size: 18px;
+            padding: 12px 20px;
+            cursor: pointer;
+            border-radius: 5px;
+            width: 100%;
+            max-width: 500px;
+            margin-top: 20px;
+            transition: background-color 0.3s;
+        }
+        #convertir:hover {
+            background-color: #138d75;
+        }
+        #convertir:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            align-items: center;
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1); 
+            width: 100%;
+        }
+        #drop-area {
+            border: 2px dashed #16a085;
+            padding: 25px;
+            text-align: center;
+            cursor: pointer;
+            border-radius: 10px;
+            background-color: #ffffff;
+            transition: all 0.3s;
+            font-size: 16px;
+            font-weight: bold;
+            color: #16a085;
+            width: 100%;
+            max-width: 400px;
+            margin: 0 auto;
+            box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        #drop-area:hover {
+            background-color: #e8f6f3;
+            box-shadow: 0px 6px 8px rgba(0, 0, 0, 0.15);
+        }
+        #drop-area.dragover {
+            background-color: #d1f2eb;
+            border-color: #138d75;
+            box-shadow: 0px 6px 12px rgba(0, 0, 0, 0.2);
+        }
+        #file-input {
+            display: none;
+        }
+        .clickable {
+            color: #007bff;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .clickable:hover {
+            color: #0056b3;
+        }
+        #file-name {
+            margin-top: 10px;
+            font-weight: normal;
+            color: #333;
+            word-break: break-all;
+        }
+        #progress-container {
+            width: 100%;
+            max-width: 500px;
+            margin-top: 15px;
+            display: none;
+        }
+        #progress-bar {
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        #progress {
+            height: 100%;
+            width: 0%;
+            background: #16a085;
+            transition: width 0.5s;
+        }
+        #progress-text {
+            text-align: center;
+            margin-top: 5px;
+            color: #555;
+        }
+        #time-remaining {
+            font-size: 14px;
+            color: #7f8c8d;
+            text-align: center;
+            margin-top: 5px;
+        }
+        .status-message {
+            text-align: center;
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        .success {
+            color: #27ae60;
+        }
+        .error {
+            color: #e74c3c;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Convertir Texto a Voz</h1>
+        <form id="conversion-form">
+            <div id="drop-area">
+                Arrastra y suelta un archivo aquí o <span class="clickable" id="browse-btn">haz clic para seleccionarlo</span>
+                <div id="file-name"></div>
+                <input type="file" id="file-input" name="archivo" accept=".pdf,.docx" required>
+            </div>
+            <div id="progress-container">
+                <div id="progress-bar">
+                    <div id="progress"></div>
+                </div>
+                <p id="progress-text">0%</p>
+                <p id="time-remaining"></p>
+                <div id="status-message" class="status-message"></div>
+            </div>
+            <button type="button" id="convertir">Convertir a Audio</button>
+        </form>
+    </div>
+
+    <script>
+        // Elementos del DOM
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const browseBtn = document.getElementById('browse-btn');
+        const fileName = document.getElementById('file-name');
+        const convertBtn = document.getElementById('convertir');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress');
+        const progressText = document.getElementById('progress-text');
+        const timeRemaining = document.getElementById('time-remaining');
+        const statusMessage = document.getElementById('status-message');
+        const form = document.getElementById('conversion-form');
+
+        // Estado de la conversión
+        let conversionState = {
+            inProgress: false,
+            filename: null,
+            startTime: null
+        };
+
+        // Evento para el botón de selección
+        browseBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            fileInput.click();
+        });
+
+        // Evento para el área de drop
+        dropArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // Mostrar el nombre del archivo seleccionado
+        fileInput.addEventListener('change', (e) => {
+            if (fileInput.files.length) {
+                fileName.textContent = `Archivo seleccionado: ${fileInput.files[0].name}`;
+                resetUI();
+            }
+        });
+
+        // Funcionalidad de drag and drop
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight() {
+            dropArea.classList.add('dragover');
+        }
+
+        function unhighlight() {
+            dropArea.classList.remove('dragover');
+        }
+
+        dropArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+            if (files.length) {
+                fileName.textContent = `Archivo seleccionado: ${files[0].name}`;
+                resetUI();
+            }
+        }
+
+        // Función para resetear la UI
+        function resetUI() {
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+            timeRemaining.textContent = '';
+            statusMessage.textContent = '';
+            statusMessage.className = 'status-message';
+        }
+
+        // Iniciar conversión
+        convertBtn.addEventListener('click', async function() {
+            if (!fileInput.files.length) {
+                showStatus('Por favor selecciona un archivo', 'error');
+                return;
+            }
+
+            // Configurar estado inicial
+            conversionState.inProgress = true;
+            conversionState.startTime = Date.now();
+            conversionState.filename = null;
+            
+            // Configurar UI
+            convertBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            resetUI();
+            showStatus('Iniciando conversión...');
+
+            const formData = new FormData();
+            formData.append('archivo', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error HTTP: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                if (data.status === "processing") {
+                    conversionState.filename = data.filename;
+                    monitorProgress();
+                }
+            } catch (error) {
+                handleConversionError(error);
+            }
+        });
+
+        // Monitorear progreso
+        async function monitorProgress() {
+            if (!conversionState.inProgress) return;
+
+            try {
+                const response = await fetch(`/progress?timestamp=${Date.now()}`);
+                const data = await response.json();
+
+                // Manejar errores del backend
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+
+                // Actualizar barra de progreso
+                const currentProgress = parseInt(progressBar.style.width) || 0;
+                if (data.progress > currentProgress) {
+                    progressBar.style.width = `${data.progress}%`;
+                    progressText.textContent = `${data.progress}% - Procesando...`;
+                    
+                    // Calcular tiempo restante
+                    if (data.progress > 0) {
+                        const elapsed = (Date.now() - conversionState.startTime) / 1000;
+                        const estimatedTotal = elapsed / (data.progress / 100);
+                        const remaining = Math.round(estimatedTotal - elapsed);
+                        timeRemaining.textContent = `Tiempo estimado: ${remaining} segundos`;
+                    }
+                }
+
+                // Cuando la conversión está completa
+                if (data.ready && data.progress >= 100) {
+                    showStatus('¡Conversión completada!', 'success');
+                    await downloadAudioFile(conversionState.filename);
+                    conversionState.inProgress = false;
+                    convertBtn.disabled = false;
+                    return;
+                }
+
+                // Continuar monitoreando
+                setTimeout(monitorProgress, 800);
+            } catch (error) {
+                handleConversionError(error);
+            }
+        }
+
+        // Descargar archivo de audio
+        async function downloadAudioFile(filename) {
+            try {
+                showStatus('Preparando descarga...');
+                
+                const response = await fetch(`/download/${filename}`);
+                
+                if (!response.ok) {
+                    throw new Error('El archivo no está disponible para descarga');
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                
+                // Limpiar después de la descarga
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    showStatus('Descarga completada', 'success');
+                }, 100);
+                
+            } catch (error) {
+                handleConversionError(error);
+            }
+        }
+
+        // Manejar errores
+        function handleConversionError(error) {
+            console.error('Error:', error);
+            conversionState.inProgress = false;
+            convertBtn.disabled = false;
+            showStatus(`Error: ${error.message}`, 'error');
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+            timeRemaining.textContent = '';
+        }
+
+        // Mostrar mensajes de estado
+        function showStatus(message, type = '') {
+            statusMessage.textContent = message;
+            statusMessage.className = `status-message ${type}`;
+        }
+    </script>      
+</body>
+</html>
